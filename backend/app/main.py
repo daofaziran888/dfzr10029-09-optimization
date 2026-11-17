@@ -10,9 +10,17 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from app.config import settings
 from app.routers import ROUTERS
+from app.services.field_summary import field_summary_service
+from app.services.field_summary_seed import bootstrap_field_summaries
 from app.store import store
 
 app = FastAPI(title="数据分析实验与数据应用服务平台", version="1.0.0")
+
+
+@app.on_event("startup")
+def load_field_summaries() -> None:
+    """启动时读取分区字段清单并生成首轮字段分区摘要（只在内存仓库里执行一次）。"""
+    bootstrap_field_summaries()
 
 app.add_middleware(
     CORSMiddleware,
@@ -35,4 +43,7 @@ def health() -> dict[str, object]:
 @app.get("/api/overview")
 def overview() -> dict[str, object]:
     """运营概览：把各业务模块的待处理量汇总成看板卡片。"""
-    return store.overview()
+    payload = store.overview()
+    # 字段分区摘要概览：待核对项按当前版本统计，与数据集页面共用同一来源。
+    payload["field_summary"] = field_summary_service.overview()
+    return payload

@@ -6,6 +6,7 @@ import io
 
 from fastapi import APIRouter, HTTPException, Query, Request
 from fastapi.responses import StreamingResponse
+from pydantic import BaseModel
 
 from app.schemas import ActionPayload, ActionResult, EntryPayload, PageResult
 from app.services.dataset import DatasetService
@@ -16,6 +17,20 @@ service = DatasetService()
 
 LIST_FIELDS = ["数据集编号", "数据集名称", "来源类型", "字段数量", "行数估算", "刷新周期", "负责人", "数据集状态"]
 STATUSES = ["待接入", "已接入", "使用中", "已归档"]
+
+
+class ReconcilePayload(BaseModel):
+    """字段分区摘要核对契约。"""
+
+    partition_id: str
+    result: str
+    remark: str | None = None
+
+
+class DriftPayload(BaseModel):
+    """模拟分区字段清单变化的联调契约。"""
+
+    fields: list[dict[str, object]]
 
 
 def query_filters(request: Request) -> dict[str, str]:
@@ -72,6 +87,74 @@ def get_entry(entry_id: int) -> dict:
     if entry is None:
         raise HTTPException(status_code=404, detail=f"分析数据集 {entry_id} 不存在或已归档")
     return entry
+
+
+@router.get("/{entry_id}/field-summary", response_model=dict)
+def get_field_summary(
+    entry_id: int,
+    changed_only: bool = Query(default=False, description="为 true 时只返回本轮发生变化的分区"),
+) -> dict:
+    """字段契约接口：读取字段分区摘要视图，按当前版本排列。"""
+    try:
+        return service.get_field_summary(entry_id, changed_only=changed_only)
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
+@router.post("/{entry_id}/field-summary/refresh", response_model=ActionResult)
+def refresh_field_summary(entry_id: int) -> ActionResult:
+    """读取当前分区字段清单，汇总变化分区并重建字段摘要，原子提交一个新版本。"""
+    try:
+        view = service.refresh_field_summary(entry_id)
+    except ValueError as exc:
+        return ActionResult(ok=False, message=str(exc))
+    changed = len(view.get("changed_partitions", []))
+    return ActionResult(
+        ok=True,
+        message=f"字段分区摘要已刷新到版本 {view['current_version']}，本轮变化分区 {changed} 个",
+        entry=view,
+    )
+
+
+@router.get("/{entry_id}/field-summary/versions", response_model=dict)
+def list_summary_versions(entry_id: int) -> dict:
+    """回查字段分区摘要保留的版本清单。"""
+    try:
+        versions = service.list_summary_versions(entry_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    return {"items": versions, "total": len(versions)}
+
+
+@router.get("/{entry_id}/field-summary/versions/{version}", response_model=dict)
+def get_summary_version(entry_id: int, version: int) -> dict:
+    """按版本号回查某一版字段分区摘要。"""
+    try:
+        return service.get_summary_version(entry_id, version)
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
+@router.post("/{entry_id}/field-summary/reconcile", response_model=ActionResult)
+def reconcile_partition(entry_id: int, payload: ReconcilePayload) -> ActionResult:
+    """写入字段分区摘要核对结果并保留对应版本；冲突时仍只保留一份有效结果。"""
+    try:
+        record = service.reconcile_partition(
+            entry_id, payload.partition_id.strip(), payload.result.strip(), remark=payload.remark)
+    except ValueError as exc:
+        return ActionResult(ok=False, message=str(exc))
+    return ActionResult(ok=True, message=f"分区 {record['分区编号']} 核对结果已写入", entry=record)
+
+
+@router.post("/{entry_id}/field-summary/simulate-drift", response_model=ActionResult)
+def simulate_drift(entry_id: int, payload: DriftPayload) -> ActionResult:
+    """联调钩子：模拟外部数据源分区字段变化，下一轮刷新才会体现在摘要里。"""
+    partition_id = str(payload.fields[0].get("分区编号", "")) if payload.fields else ""
+    try:
+        result = service.simulate_partition_drift(entry_id, partition_id, payload.fields)
+    except (ValueError, IndexError, KeyError) as exc:
+        return ActionResult(ok=False, message=f"模拟变化失败：{exc}")
+    return ActionResult(ok=True, message="数据源分区字段已变化，等待下一轮刷新", entry=result)
 
 
 @router.post("", response_model=ActionResult)

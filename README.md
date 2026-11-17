@@ -75,5 +75,37 @@ npm run dev
 - 列表接口统一返回 `{ items, total, page, size }`，动作接口统一返回 `{ ok, message }`。
 - 状态流转只允许在 `app/services` 里改，路由层不做业务判断。
 
+## 字段分区摘要（数据集管理）
+
+数据集字段清单不再每次刷新都整批重建，而是维护分区字段摘要视图，核心实现见
+`backend/app/services/field_summary.py`（进程级单例，数据集页面、查询模板、运营概览
+共享同一份来源记录）：
+
+- **只刷新变化分区**：按分区读取当前字段清单并计算内容签名，签名未变的分区沿用上一版
+  摘要，只有字段变化、分区新建/下线/重新上线的分区才重建并出现在 `changed_partitions`。
+- **字段顺序稳定**：全局字段注册表记录字段首次出现的位置，新字段只追加队尾，老字段位置
+  永久不变；分区摘要顺序同样沿用既有出现顺序。
+- **同一轮原子提交**：分区摘要与字段顺序在同一次刷新内于临时视图加工，完成后一次性替换
+  可见状态，每次提交只生成一个自增版本，旧版本整体归档可回查，当前有效版本始终唯一。
+- **核对结果唯一**：变化分区按当前版本生成待核对项，同分区同版本重复或冲突核对只保留
+  一份有效结果，概览页汇总待核对量。
+
+接口契约（均挂在数据集路由下）：
+
+| 方法 | 路径 | 说明 |
+| --- | --- | --- |
+| GET | `/api/dataset/{id}/field-summary?changed_only=` | 字段契约接口，按当前版本返回分区摘要视图 |
+| POST | `/api/dataset/{id}/field-summary/refresh` | 读取当前数据、汇总变化分区并重建摘要，提交新版本 |
+| GET | `/api/dataset/{id}/field-summary/versions` | 保留版本清单 |
+| GET | `/api/dataset/{id}/field-summary/versions/{version}` | 按版本回查摘要 |
+| POST | `/api/dataset/{id}/field-summary/reconcile` | 写入分区核对结果（核对通过/核对驳回/冲突待裁决） |
+| POST | `/api/dataset/{id}/field-summary/simulate-drift` | 联调钩子，模拟外部数据源分区字段变化 |
+
+查询模板通过 `GET /api/query_builder/dataset-fields/{数据集编号}` 跨模块读取同一来源的
+稳定字段顺序；未接入摘要的旧数据集返回空顺序与说明，不打断既有页面。
+
+验收脚本：`backend/tests/test_field_summary_edge.py`（服务级边界场景）、
+`frontend/tests/field-summary.spec.ts`（端到端验收）。
+
 领域：数据工程
 子方向：数据分析与数据应用

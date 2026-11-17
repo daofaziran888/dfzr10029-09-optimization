@@ -72,6 +72,33 @@
       </form>
     </div>
 
+    <section class="field-order-panel" data-testid="dataset-field-order-panel">
+      <header class="page-head">
+        <div>
+          <h3>数据集字段顺序</h3>
+          <p class="page-desc">跨模块读取字段分区摘要的同一份来源记录，查询模板看到的字段顺序与数据集页面保持稳定一致。</p>
+        </div>
+        <div class="page-actions">
+          <select v-model="selectedDataset" data-testid="dataset-field-select" @change="loadDatasetFields">
+            <option v-for="option in datasetOptions" :key="option.code" :value="option.code">
+              {{ option.code }}（{{ option.name }}）
+            </option>
+          </select>
+          <button class="btn" data-testid="reload-dataset-fields" type="button" @click="loadDatasetFields">重新读取</button>
+        </div>
+      </header>
+      <p v-if="datasetFieldMessage" class="page-desc">{{ datasetFieldMessage }}</p>
+      <div class="field-order-wrap" data-testid="dataset-field-order">
+        <span v-for="(name, index) in datasetFieldOrder" :key="name" class="field-tag">
+          {{ index + 1 }}. {{ name }}
+        </span>
+        <span v-if="!datasetFieldOrder.length" class="empty-state">该数据集暂无字段顺序记录</span>
+      </div>
+      <p class="page-desc" v-if="datasetFieldVersion">
+        来源版本：v{{ datasetFieldVersion }}，与数据集页面字段分区摘要当前版本一致
+      </p>
+    </section>
+
     <footer class="page-foot">
       <span>共 {{ total }} 条OLAP查询记录</span>
       <span v-if="errorMessage" class="error-text">{{ errorMessage }}</span>
@@ -184,5 +211,64 @@ async function reload() {
   }
 }
 
-onMounted(reload)
+// 跨模块读取数据集字段分区摘要，字段顺序与数据集页面共享同一来源。
+const datasetOptions = [
+  { code: 'DATA-0001', name: '数据集管理样例1' },
+  { code: 'DATA-0002', name: '数据集管理样例2' },
+  { code: 'DATA-0003', name: '数据集管理样例3' },
+]
+const selectedDataset = ref(datasetOptions[0].code)
+const datasetFieldOrder = ref<string[]>([])
+const datasetFieldVersion = ref<number | null>(null)
+const datasetFieldMessage = ref('')
+
+async function loadDatasetFields() {
+  datasetFieldMessage.value = ''
+  try {
+    const response = await request(`${ENDPOINT}/dataset-fields/${encodeURIComponent(selectedDataset.value)}`)
+    if (!response.ok) throw new Error('字段分区摘要读取失败')
+    const payload = await response.json()
+    datasetFieldOrder.value = payload.field_order ?? []
+    datasetFieldVersion.value = payload.current_version ?? null
+    datasetFieldMessage.value = payload.message ?? ''
+  } catch (error) {
+    datasetFieldMessage.value = error instanceof Error ? error.message : '字段分区摘要读取失败'
+    datasetFieldOrder.value = []
+  }
+}
+
+onMounted(() => {
+  void reload()
+  void loadDatasetFields()
+})
 </script>
+
+<style scoped>
+.field-order-panel {
+  background: #fff;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 12px 16px;
+  margin-bottom: 12px;
+}
+.field-order-panel select {
+  padding: 6px 10px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  font-size: 13px;
+}
+.field-order-wrap {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  padding: 8px 0;
+}
+.field-tag {
+  background: #eef4ff;
+  border: 1px solid #c7dbff;
+  border-radius: 999px;
+  padding: 2px 10px;
+  font-size: 12px;
+  white-space: nowrap;
+}
+</style>

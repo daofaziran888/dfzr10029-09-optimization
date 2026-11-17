@@ -65,6 +65,12 @@ def export_entries(
         headers={"Content-Disposition": 'attachment; filename="query_builder.csv"'})
 
 
+@router.get("/dataset-fields/{dataset_code:path}", response_model=dict)
+def get_dataset_field_order(dataset_code: str) -> dict:
+    """跨模块读取数据集字段分区摘要，查询模板拿到稳定的字段顺序与当前版本。"""
+    return service.dataset_field_order(dataset_code)
+
+
 @router.get("/{entry_id}", response_model=dict)
 def get_entry(entry_id: int) -> dict:
     """读取单条查询模板明细；不存在时给出可读的错误说明。"""
